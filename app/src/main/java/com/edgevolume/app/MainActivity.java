@@ -1,9 +1,11 @@
 package com.edgevolume.app;
 
-import android.accessibilityservice.AccessibilityService;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -14,18 +16,17 @@ import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.Settings;
-import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.accessibility.AccessibilityEvent;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -37,7 +38,7 @@ import android.widget.Toast;
 public class MainActivity extends Activity {
 
     public static final String PREFS_NAME = "EdgeVolumePrefs";
-    public static final String KEY_MASTER_ENABLED = "master_enabled";
+    public static final String KEY_RUNNING = "service_running";
     public static final String KEY_LEFT_ENABLED = "left_enabled";
     public static final String KEY_RIGHT_ENABLED = "right_enabled";
     public static final String KEY_VISIBLE_STRIP = "visible_strip";
@@ -47,7 +48,6 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private TextView statusText;
-    private TextView batteryStatusText;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,24 +69,12 @@ public class MainActivity extends Activity {
         title.setTextColor(Color.parseColor("#1A202C"));
         root.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Auto-Start • Background Active • Zero Notification");
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        subtitle.setTextColor(Color.parseColor("#4A5568"));
-        subtitle.setPadding(0, dpToPx(2), 0, dpToPx(12));
-        root.addView(subtitle);
-
         statusText = new TextView(this);
         statusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        statusText.setPadding(0, dpToPx(4), 0, dpToPx(6));
+        statusText.setPadding(0, dpToPx(6), 0, dpToPx(14));
         root.addView(statusText);
 
-        batteryStatusText = new TextView(this);
-        batteryStatusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        batteryStatusText.setPadding(0, 0, 0, dpToPx(14));
-        root.addView(batteryStatusText);
-
-        // Quick Volume Buttons (Backup Controls)
+        // Quick Backup Volume Buttons
         LinearLayout quickRow = new LinearLayout(this);
         quickRow.setOrientation(LinearLayout.HORIZONTAL);
         quickRow.setPadding(0, 0, 0, dpToPx(14));
@@ -108,54 +96,55 @@ public class MainActivity extends Activity {
         quickRow.addView(showPanelBtn, btnLp);
         root.addView(quickRow);
 
-        // Step 1: Accessibility Service Button (No Notification + Auto-Start)
-        Button enableServiceBtn = createButton("1. Enable Auto-Start Background Service", "#2F855A");
-        enableServiceBtn.setOnClickListener(v -> {
-            Toast.makeText(this, "Downloaded Services / Installed Apps me jaakar 'Edge Volume Control' ON karein", Toast.LENGTH_LONG).show();
-            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-            startActivity(intent);
-        });
-        root.addView(enableServiceBtn, createMarginParams(0, dpToPx(8)));
+        // Button 1: Start Service & Grant Overlay
+        Button startBtn = createButton("1. Start Edge Swipe (Auto-Start Ready)", "#2F855A");
+        startBtn.setOnClickListener(v -> startEdgeService());
+        root.addView(startBtn, createMarginParams(0, dpToPx(8)));
 
-        // Step 2: Ignore Battery Optimization Button (Keep Alive in Background on Realme UI)
+        // Button 2: Battery Exemption for 24/7 Background Active
         Button batteryBtn = createButton("2. Keep Active in Background (Battery Free)", "#D69E2E");
         batteryBtn.setOnClickListener(v -> requestBatteryExemption());
-        root.addView(batteryBtn, createMarginParams(0, dpToPx(16)));
+        root.addView(batteryBtn, createMarginParams(0, dpToPx(8)));
 
-        // Master Switch (Pause/Resume Edge Strips anytime without opening Settings)
-        Switch masterSwitch = new Switch(this);
-        masterSwitch.setText("Edge Swipe Active (Master Switch)");
-        masterSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        masterSwitch.setChecked(prefs.getBoolean(KEY_MASTER_ENABLED, true));
-        masterSwitch.setOnCheckedChangeListener((b, checked) -> {
-            prefs.edit().putBoolean(KEY_MASTER_ENABLED, checked).apply();
-            updateStatusText();
-        });
-        root.addView(masterSwitch, createMarginParams(0, dpToPx(12)));
+        // Button 3: Turn Off Notification Permanently
+        Button hideNotifBtn = createButton("3. Hide Notification Forever (Turn Off)", "#4A5568");
+        hideNotifBtn.setOnClickListener(v -> openNotificationSettings());
+        root.addView(hideNotifBtn, createMarginParams(0, dpToPx(8)));
 
-        // Left & Right Edge Toggles
+        // Stop Service Button
+        Button stopBtn = createButton("Stop Edge Swipe Service", "#C53030");
+        stopBtn.setOnClickListener(v -> stopEdgeService());
+        root.addView(stopBtn, createMarginParams(0, dpToPx(16)));
+
+        // Toggles
         Switch leftSwitch = new Switch(this);
         leftSwitch.setText("Enable Left Edge Swipe");
         leftSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         leftSwitch.setChecked(prefs.getBoolean(KEY_LEFT_ENABLED, true));
-        leftSwitch.setOnCheckedChangeListener((b, checked) ->
-                prefs.edit().putBoolean(KEY_LEFT_ENABLED, checked).apply());
+        leftSwitch.setOnCheckedChangeListener((b, checked) -> {
+            prefs.edit().putBoolean(KEY_LEFT_ENABLED, checked).apply();
+            restartIfRunning();
+        });
         root.addView(leftSwitch, createMarginParams(0, dpToPx(12)));
 
         Switch rightSwitch = new Switch(this);
         rightSwitch.setText("Enable Right Edge Swipe");
         rightSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         rightSwitch.setChecked(prefs.getBoolean(KEY_RIGHT_ENABLED, true));
-        rightSwitch.setOnCheckedChangeListener((b, checked) ->
-                prefs.edit().putBoolean(KEY_RIGHT_ENABLED, checked).apply());
+        rightSwitch.setOnCheckedChangeListener((b, checked) -> {
+            prefs.edit().putBoolean(KEY_RIGHT_ENABLED, checked).apply();
+            restartIfRunning();
+        });
         root.addView(rightSwitch, createMarginParams(0, dpToPx(12)));
 
         Switch visibleSwitch = new Switch(this);
         visibleSwitch.setText("Show Visible Edge Handle (Off = 100% Invisible)");
         visibleSwitch.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         visibleSwitch.setChecked(prefs.getBoolean(KEY_VISIBLE_STRIP, false));
-        visibleSwitch.setOnCheckedChangeListener((b, checked) ->
-                prefs.edit().putBoolean(KEY_VISIBLE_STRIP, checked).apply());
+        visibleSwitch.setOnCheckedChangeListener((b, checked) -> {
+            prefs.edit().putBoolean(KEY_VISIBLE_STRIP, checked).apply();
+            restartIfRunning();
+        });
         root.addView(visibleSwitch, createMarginParams(0, dpToPx(16)));
 
         // Edge Width SeekBar
@@ -176,7 +165,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt(KEY_EDGE_WIDTH_DP, val).apply();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { restartIfRunning(); }
         });
         root.addView(widthSeek, createMarginParams(0, dpToPx(14)));
 
@@ -198,7 +187,7 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt(KEY_EDGE_HEIGHT_PCT, val).apply();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { restartIfRunning(); }
         });
         root.addView(heightSeek, createMarginParams(0, dpToPx(14)));
 
@@ -220,20 +209,16 @@ public class MainActivity extends Activity {
                 prefs.edit().putInt(KEY_SENSITIVITY_DP, val).apply();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { restartIfRunning(); }
         });
-        root.addView(sensSeek, createMarginParams(0, dpToPx(18)));
-
-        TextView note = new TextView(this);
-        note.setText("Realme 6 Setup Guide:\n"
-                + "• Button 1 dabakar Accessibility me 'Edge Volume Control' ON kar dein — isse bina kisi notification ke app 24/7 background me chalega aur phone restart par khud start hoga.\n"
-                + "• Button 2 dabakar Battery Optimization 'Allow' kar dein taaki Realme UI background me service ko kabhi roke nahi.");
-        note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        note.setTextColor(Color.parseColor("#4A5568"));
-        root.addView(note);
+        root.addView(sensSeek, createMarginParams(0, dpToPx(16)));
 
         setContentView(scrollView);
         updateStatusText();
+
+        if (prefs.getBoolean(KEY_RUNNING, true) && Settings.canDrawOverlays(this)) {
+            startEdgeService();
+        }
     }
 
     @Override
@@ -249,6 +234,37 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void startEdgeService() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "'Display over other apps' permission ON karein", Toast.LENGTH_LONG).show();
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+            return;
+        }
+        prefs.edit().putBoolean(KEY_RUNNING, true).apply();
+        Intent svc = new Intent(this, EdgeOverlayService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(svc);
+        } else {
+            startService(svc);
+        }
+        updateStatusText();
+    }
+
+    private void stopEdgeService() {
+        prefs.edit().putBoolean(KEY_RUNNING, false).apply();
+        stopService(new Intent(this, EdgeOverlayService.class));
+        updateStatusText();
+    }
+
+    private void restartIfRunning() {
+        if (prefs.getBoolean(KEY_RUNNING, false) && Settings.canDrawOverlays(this)) {
+            stopService(new Intent(this, EdgeOverlayService.class));
+            startEdgeService();
+        }
+    }
+
     private void requestBatteryExemption() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -258,57 +274,41 @@ public class MainActivity extends Activity {
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     startActivity(intent);
                 } catch (Exception e) {
-                    Intent intent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
-                    startActivity(intent);
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
                 }
             } else {
-                Toast.makeText(this, "Battery Unrestricted pehle se ON hai!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Battery Background Mode pehle se Unrestricted hai!", Toast.LENGTH_SHORT).show();
             }
         }
     }
 
-    private boolean isAccessibilityServiceEnabled() {
-        ComponentName expected = new ComponentName(this, EdgeAccessibilityService.class);
-        String enabledServices = Settings.Secure.getString(
-                getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        );
-        if (enabledServices == null) return false;
-        TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
-        splitter.setString(enabledServices);
-        while (splitter.hasNext()) {
-            ComponentName cn = ComponentName.unflattenFromString(splitter.next());
-            if (cn != null && cn.equals(expected)) {
-                return true;
+    private void openNotificationSettings() {
+        try {
+            Intent intent = new Intent();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                intent.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                intent.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            } else {
+                intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(Uri.parse("package:" + getPackageName()));
             }
-        }
-        return false;
+            startActivity(intent);
+            Toast.makeText(this, "Yahan 'Allow Notifications' OFF kar dein — notification hamesha ke liye band ho jayegi!", Toast.LENGTH_LONG).show();
+        } catch (Exception ignored) {}
     }
 
     private void updateStatusText() {
-        boolean serviceOn = isAccessibilityServiceEnabled();
-        boolean masterOn = prefs.getBoolean(KEY_MASTER_ENABLED, true);
-
-        if (!serviceOn) {
-            statusText.setText("Service Status: OFF (Button 1 dabakar Accessibility ON karein)");
+        boolean hasPerm = Settings.canDrawOverlays(this);
+        boolean running = prefs.getBoolean(KEY_RUNNING, false) && hasPerm;
+        if (!hasPerm) {
+            statusText.setText("Status: Permission Needed (Button 1 dabayein)");
             statusText.setTextColor(Color.parseColor("#C53030"));
-        } else if (!masterOn) {
-            statusText.setText("Service Status: PAUSED (Master Switch OFF hai)");
-            statusText.setTextColor(Color.parseColor("#D69E2E"));
-        } else {
-            statusText.setText("Service Status: ACTIVE IN BACKGROUND (No Notification)");
+        } else if (running) {
+            statusText.setText("Status: ACTIVE IN BACKGROUND (Auto-Start ON)");
             statusText.setTextColor(Color.parseColor("#2F855A"));
-        }
-
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        boolean batteryFree = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
-                || (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName()));
-        if (batteryFree) {
-            batteryStatusText.setText("Battery Background Mode: UNRESTRICTED (Auto-Start Ready)");
-            batteryStatusText.setTextColor(Color.parseColor("#2F855A"));
         } else {
-            batteryStatusText.setText("Battery Background Mode: RESTRICTED (Button 2 dabayein)");
-            batteryStatusText.setTextColor(Color.parseColor("#D69E2E"));
+            statusText.setText("Status: STOPPED");
+            statusText.setTextColor(Color.parseColor("#718096"));
         }
     }
 
@@ -336,40 +336,66 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================
-    // ZERO-NOTIFICATION, AUTO-START, 24/7 BACKGROUND ACCESSIBILITY OVERLAY
+    // 24/7 BACKGROUND OVERLAY SERVICE (SILENT MIN-PRIORITY CHANNEL)
     // =========================================================================
-    public static class EdgeAccessibilityService extends AccessibilityService
-            implements SharedPreferences.OnSharedPreferenceChangeListener {
+    public static class EdgeOverlayService extends Service {
 
+        private static final String CHANNEL_ID = "edge_silent_channel";
         private WindowManager windowManager;
         private View leftEdgeView;
         private View rightEdgeView;
         private AudioManager audioManager;
         private Vibrator vibrator;
-        private SharedPreferences prefs;
 
         @Override
-        protected void onServiceConnected() {
-            super.onServiceConnected();
+        public void onCreate() {
+            super.onCreate();
             windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
             audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
             vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            prefs.registerOnSharedPreferenceChangeListener(this);
-            refreshOverlays();
+            startSilentForeground();
         }
 
         @Override
-        public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
-            refreshOverlays();
+        public int onStartCommand(Intent intent, int flags, int startId) {
+            removeOverlays();
+            setupOverlays();
+            return START_STICKY;
         }
 
-        private void refreshOverlays() {
-            removeOverlays();
-            if (prefs == null || !prefs.getBoolean(KEY_MASTER_ENABLED, true)) {
-                return;
+        private void startSilentForeground() {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(
+                        CHANNEL_ID,
+                        "Silent Background Service",
+                        NotificationManager.IMPORTANCE_MIN
+                );
+                channel.setShowBadge(false);
+                channel.setSound(null, null);
+                NotificationManager nm = getSystemService(NotificationManager.class);
+                if (nm != null) {
+                    nm.createNotificationChannel(channel);
+                }
             }
 
+            Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? new Notification.Builder(this, CHANNEL_ID)
+                    : new Notification.Builder(this).setPriority(Notification.PRIORITY_MIN);
+
+            Notification notification = builder
+                    .setContentTitle("Edge Volume")
+                    .setContentText("Tap Button 3 in app to hide this notification")
+                    .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+                    .setOngoing(true)
+                    .build();
+
+            startForeground(101, notification);
+        }
+
+        private void setupOverlays() {
+            if (!Settings.canDrawOverlays(this)) return;
+
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
             boolean leftEnabled = prefs.getBoolean(KEY_LEFT_ENABLED, true);
             boolean rightEnabled = prefs.getBoolean(KEY_RIGHT_ENABLED, true);
             boolean visibleStrip = prefs.getBoolean(KEY_VISIBLE_STRIP, false);
@@ -382,18 +408,17 @@ public class MainActivity extends Activity {
             int stripHeightPx = Math.round(dm.heightPixels * (heightPct / 100f));
             int stepPx = Math.max(18, Math.round(sensitivityDp * dm.density));
 
-            try {
-                if (leftEnabled) {
-                    leftEdgeView = createEdgeView(visibleStrip, stepPx);
-                    windowManager.addView(leftEdgeView, createOverlayParams(
-                            Gravity.START | Gravity.CENTER_VERTICAL, stripWidthPx, stripHeightPx));
-                }
-                if (rightEnabled) {
-                    rightEdgeView = createEdgeView(visibleStrip, stepPx);
-                    windowManager.addView(rightEdgeView, createOverlayParams(
-                            Gravity.END | Gravity.CENTER_VERTICAL, stripWidthPx, stripHeightPx));
-                }
-            } catch (Exception ignored) {}
+            if (leftEnabled) {
+                leftEdgeView = createEdgeView(visibleStrip, stepPx);
+                windowManager.addView(leftEdgeView, createOverlayLayoutParams(
+                        Gravity.START | Gravity.CENTER_VERTICAL, stripWidthPx, stripHeightPx));
+            }
+
+            if (rightEnabled) {
+                rightEdgeView = createEdgeView(visibleStrip, stepPx);
+                windowManager.addView(rightEdgeView, createOverlayLayoutParams(
+                        Gravity.END | Gravity.CENTER_VERTICAL, stripWidthPx, stripHeightPx));
+            }
         }
 
         private View createEdgeView(boolean visible, int stepPx) {
@@ -418,7 +443,7 @@ public class MainActivity extends Activity {
 
                         case MotionEvent.ACTION_MOVE:
                             float currentY = event.getRawY();
-                            float diffY = lastStepY - currentY; // Positive = Swipe Up
+                            float diffY = lastStepY - currentY;
 
                             if (Math.abs(diffY) >= stepPx) {
                                 int direction = diffY > 0
@@ -449,20 +474,6 @@ public class MainActivity extends Activity {
             return v;
         }
 
-        private WindowManager.LayoutParams createOverlayParams(int gravity, int width, int height) {
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    width,
-                    height,
-                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT
-            );
-            params.gravity = gravity;
-            return params;
-        }
-
         private void vibrateTick() {
             if (vibrator == null || !vibrator.hasVibrator()) return;
             try {
@@ -472,6 +483,24 @@ public class MainActivity extends Activity {
                     vibrator.vibrate(12);
                 }
             } catch (Exception ignored) {}
+        }
+
+        private WindowManager.LayoutParams createOverlayLayoutParams(int gravity, int width, int height) {
+            int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    : WindowManager.LayoutParams.TYPE_PHONE;
+
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    width,
+                    height,
+                    overlayType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+            );
+            params.gravity = gravity;
+            return params;
         }
 
         private void removeOverlays() {
@@ -486,31 +515,33 @@ public class MainActivity extends Activity {
         }
 
         @Override
-        public void onAccessibilityEvent(AccessibilityEvent event) {}
-
-        @Override
-        public void onInterrupt() {}
-
-        @Override
         public void onDestroy() {
-            if (prefs != null) {
-                prefs.unregisterOnSharedPreferenceChangeListener(this);
-            }
             removeOverlays();
             super.onDestroy();
+        }
+
+        @Override
+        public IBinder onBind(Intent intent) {
+            return null;
         }
     }
 
     // =========================================================================
-    // BOOT RECEIVER FOR AUTO-START ON REALME REBOOT
+    // BOOT RECEIVER: AUTO-START SERVICE WHEN REALME PHONE RESTARTS
     // =========================================================================
     public static class BootReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (intent == null || intent.getAction() == null) return;
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            prefs.edit().putBoolean(KEY_MASTER_ENABLED, true).apply();
+            if (prefs.getBoolean(KEY_RUNNING, true) && Settings.canDrawOverlays(context)) {
+                Intent svc = new Intent(context, EdgeOverlayService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc);
+                } else {
+                    context.startService(svc);
+                }
+            }
         }
     }
 }
-                                      
