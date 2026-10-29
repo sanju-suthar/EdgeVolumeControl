@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Deep Royal Blue Rounded Background -->
+    <path
+        android:fillColor="#1E3A8A"
+        android:pathData="M24,6 L84,6 A18,18 0 0,1 102,24 L102,84 A18,18 0 0,1 84,102 L24,102 A18,18 0 0,1 6,84 L6,24 A18,18 0 0,1 24,6 Z" />
+
+    <!-- Left & Right Cyan Edge Bars -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M14,28 L20,28 L20,80 L14,80 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M88,28 L94,28 L94,80 L88,80 Z" />
+
+    <!-- Center White Speaker Icon -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,44 L44,44 L58,30 L58,78 L44,64 L32,64 Z" />
+
+    <!-- Speaker Sound Waves -->
+    <path
+        android:fillColor="#93C5FD"
+        android:pathData="M65,41 C70,45 70,63 65,67 L68,71 C76,64 76,44 68,37 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M73,33 C82,42 82,66 73,75 L77,79 C88,68 88,40 77,29 Z" />
+
+</vector>
